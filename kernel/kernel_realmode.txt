@@ -1,0 +1,94 @@
+osdev.org -> info su sistemi operativi
+
+ring 0 = tutti i privilegi
+
+real mode = opero sulla memoria fisica (non virtuale) 
+
+op size = 16 bits,  mantenuta per retrocomp con i vecchi processori
+-> posso accedere a + memoria con i segments registers
+
+
+possiamo accedere alle funzioni del bios (utile per exploitare) -> posso fare tipo syscalls e accedere a in/out
+-> se non c'e' il bios e' + complicato, dovrei scrivere un driver ATA a mano
+
+
+REAL MODE MEMORY SEGMENTS
+segment registers = registro a 16 bits che puo'contenere un numero che molt per 10 e add all'indirizzo da leggere risolve un indirizzo fisico che poi verra' usato per l'accesso al registro
+
+example: cs + ip = addr fisico
+
+-> + addrs logici possono risolvere allo stesso addr fisico
+
+
+come fare pwn su real mode??
+page table = in protective mode, def la mem virtuale e da' i permessi alla virtual memory
+
+- nessuna page table:
+	-> accediamo direttamente alla memoria (= tutto rwx)
+	-> tutto quello che c'e' nel processore sono tutti in uno stesso addr space contiguo (stack, codice e data nello stesso addr space): posso fare crescere lo stack verso il basso ad esempio e in basso c'e' il codice eseguibile i dati che controlliamo possono sovrascrivere il codice (es sovrascrivo una ret con dei dati controllati)
+	-> gli indirizzi sono deterministici
+
+
+
+exceptions = interrupts, handled con IDT (IVT in real mode), questa tabella contiene 256 far pointers, se riusciamo a sovrascriverli quando succede un interrupt salta all'indirizzo che ho messo, in protected mode si puo' fare solo se conosco altre info
+
+
+il bios popola la tabella (selector + offset)
+
+iret = return da un interrupt
+conseguenza: se abbiamo uno shellcode in memoria e facciamo in modo che l'execution flow vada da qualche parte in memoria possiamo fare in modo che eseguendo istruzioni undefined (fuori da un loop infinito) il flow raggiunge il nostro shellcode e lo esegue (lo stato della memoria, shellcode e registri puo' essere incasinato)
+
+
+ci possono essere dei problemi in uno stack overflow: il bios non ha un suo stack che si salva e usa per le funzioni -> quindi lo stack potrebbe non essere sempre controllato da noi, il bios puo' scrivere sul nostro stack
+
+-> lo stack segment non dovrebbe cambiare, ma comunque c'e' un cambiamento di memoria, quindi qualche byte al di sopra del nostro sp puo' essere sovrascritto
+
+(alcuni interrupt vengono chiamati continuamente dal bios ad es. quelli sui timer: devo ottimizzare l'exploit non mettendo timeouts o sleep ad es.)
+
+
+
+protective mode: os moderni implementano questa mode, difference con:
+- segmentazione della memoria: GDT = modello di protezione della memoria, un po' obsoleto
+- memory paging: come funziona adesso 
+
+virtualization extension: vedi manuale intel
+
+- system management mode
+
+
+
+
+boot sector = modo in cui i compuiter si accendevano prima di uefi
+un hard disk ha un programma (boot loader) che termina con i bytes 55 AA, il programma viene sempre caricato all'indirizzo 7c00 
+
+se non trova 55 AA il bios va al prossimo hard disk
+
+
+
+chall:
+istruzione out = privilegiata, serve per interagire con le porte di i/o
+
+
+i/o port 0x3f8 = prima porta seriale
+
+
+puts main; jmp puts -> ret addr di puts = main
+
+posso fare of dello stack perche' non c'e' mai un return ma una jmp
+
+possiamo controllare tbx
+
+a 0x6000 ci sono blocchi contigui
+
+nella get input ci sono 0x7002 e 0x7004 = buffer dove la read legge (0x7002 legge la word per leggere il valore in hex che gli abbiamo passato, 0x7004 legge l'opzione del menu)
+
+come exploitare:
+- stack of/scrivere a un offset dall'array di slot
+
+- comunque devo scrivere uno shellcode da qualche parte, devo leggere dall'hard disk un altro settore usando la API del bios perche' non viene caricato dal boot loader
+
+- altro modo: sovrascrivere un pezzo di codice con una jump allo shellcode
+
+come farlo sovrascrivendo lo stack:
+vedi chall
+

@@ -1,0 +1,102 @@
+ptmalloc -> impl su cui si basa la libc
+fondo dell'heap = top chunk (o wilderness), di una size enorme e ogni volta che si fa una malloc della size viene sottratta
+
+quando non c'e' piu' spazio disp -> chiamata a brk, viene espanso il top chunk
+
+comandi gdb:
+vis = visualize heap chunk
+vmma
+nella main arena  (in libc) sono contenute le teste dei bins:
+
+- tcache (< 0x500)
+- fast 
+- unsorted
+- small 
+- large
+
+
+fast: linked list LIFO
+unsorted: double linked list,alternativa ai bins, se viene richiesta una nuova malloc di una size grande, se e' troppo grande e la libc non trova il chunk giusto riordina l'unsorted negli small o nei large bins
+se invece viene richiesta un'allocazione e non e' disponibile fast o tcache va negli unsorted piuttosto di andare a prendere nel top chunk. se e' piu' piccola viene sottratta size all'unsorted
+
+essendo double linked list, ogni elemento ha fd e backword pointer, nel primo elemento il fd e backword pointer puntano alla main arena e quindi alla libc
+
+
+consolidation = se un chunk andrebbe a finire nell'unsorted e dopo quello andrebbe a chiedere spazio al top chunk lo mette direttamente nel top chunk ( = collasso nel top chunk)
+
+
+double free:
+invocare 2 volte la free sul chunk
+
+use after free:
+malloc, free e il programma permette comunque di utilizzare ancora quel chunk
+
+heap of:
+bof sull'heap (sovrascrivere i metadati)
+
+arbitrary free:
+free su un puntatore arbitrario
+
+
+fast bin attack:
+- allocare lo stesso chunk 2 volte -> in un indirizzo di memoria arbitrario
+
+inietto nella linked list un indirizzo di memoria arbitrario
+quando si fa un pop dalla lista dei fastbin viene fatto un check sulla size cioe' se la size e' corente con la linked list in cui si trova il chunk
+
+check per il free di un chunk gia' filato di fila: esiste un check su cosa viene freeato se l'ultimo elemento freeato non corrisponde alla testa (non posso fare free(b); free(b))
+
+bypass:
+free(b); 
+free(a); 
+free(b); 
+
+
+fastbin attack:
+malloc a
+malloc b
+free b 
+free a
+free b
+
+malloc c-> = b
+malloc d
+
+memset b con indirizzo arbitrario
+malloc e -> puntatore a ind arb
+
+
+
+Tcache poisoning
+- alloca chunk arbitrario
+
+allocatore scorre finche non e'e un null, esiste un counter che conta gli elementi
+se il contatore e' a 0 malloc non ritorna da li' il puntatore
+
+quindi nell'attacco devo avere almeno 2 elementi nella lista
+
+se ce ne fosse solo 1 e corrompiamo il next pointer ma non arriveremmo a niente
+
+mitigazioni tcache:
+in base a versione della libc, e' stata aggiunta una key ai metadati
+(2nd quadword, 8 byte)
+ per prevenire le double free
+
+se la key e' = pointer alla tcache non e' normale quindi potrebbe esserci double free -> scorre tutta la tcache e vede se il puntatore c'e' gia'-> se c'e' abbiamo double free e il programma crasha
+
+ora la key sono 64 bit random
+
+
+- pointer protection:
+da libc 2.32 il next pointer viene "cifrato" (vedi slide per come viene cifrato)
+
+-> devo quindi sapere un leak dell'heap
+
+
+
+comando su gdb: find_fake_fast 0x...
+cerca indirizzo per  fastbin size field
+
+
+
+

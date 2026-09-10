@@ -1,0 +1,213 @@
+
+WEIRD EXPLOITATION:
+- ret2csu: normalmente libc_csu_init serve per i registri
+serve leak binario o no pie
+
+contiene gadget interessanti: 
+-> popper, per il pop dei registri (registri pero' non tanto utili per fare call)
+
+-> caller: prende i registri r14, r13, r14 e  li mette nei registri degli argomenti e poi chiama 
+su r15 mettiamo l'addr della funzione cosi' viene chiamata con gli argomenti che vogliamo: chiamo funzione arbitraria con parametri arbitrari
+
+devo mettere rbx a 0 e se mettiamo rbp a 1 possia o concatenare le chiamate (perche'c'e cmp rbp,rbp)
+
+gli offset a popper e caller da csu sono sempre gli stessi
+
+chall:
+uso il puntatore a funzione per saltare all'inizio di win, posso controllare gli argomenti a, b, c
+
+
+RET2DLRESOLVE
+dl resolve = risolutore dei simboli, salta nella libc, risolve il simbolo e lo esegue subito senza ritornare al binario
+eseguita prima che il simbolo sia messo nella got
+
+-> non devo avere full RELRO, altrimenti devo avere un leak del binario: devo poter scrivere in un area di memoria del binario e devo saltare a dl resolve
+
+
+dl_runtime_resolve_xsave = struttura che serve per salvare e risolvere il simbolo
+
+-> posso risolvere simboli arbitrari della libc! 
+(ex. simboli)
+
+non posso risolvere ad es. one gadget diretto ma posso risolvere solo simboli
+- controllare gli argomenti dei registri
+
+
+per exploit: possiamo usare la funzione di pwntools
+
+ret2dlresolve(elf, symbol="system"
+
+
+SROP
+
+funz che vinee chiamata per ritornare d aun signale int
+
+fa il pop dell stato salvat prima dell'int (un interrupot non deve modificare il valore dei registri)
+
+
+vinsoli:
+- dobbiamo settare tutti i registri
+- ci serve una syscall e il controllo di rax
+- serve un leak del binario o no pie
+- ci serve un overflow grande (0x100 bytes)
+
+
+BROP:
+non ho il binario (what)
+
+1. bruteforce overflow
+
+se c'e' buffering di stdout(di default) corrompo rbp ma non corrompo il ret addr ma la puts non viene stampata perche' va in segfault nel ret del main non perche' hai fatto effettivamente of ma solo perche' hai corrotto rbp (solve: aggiungere 8 bytes al payload? maybe?)
+
+
+2. trova architettura e pie/no pie
+
+- bruteforce plt: solo l'ultimo byte perhce' il resto e' fisso
+
+- se c'e' il pie bruteforce solo ultimo byte, posso provare con 2 byte ma devo runnarlo 32 volte per l'aslr ma non e' probabilmente possibile
+
+- lucky: spera di essere nel ret addr del main e bruteforce one gadget
+
+3. trova la print
+- bruteforce plt
+oppure
+- trova la print del binario e salva l'indirizzo per poi trovare un gadget around it
+
+4. trova un gadget
+
+gadget + qualcosa da stampare + print
+
+guessed gadget * 2 + print ( il gadget potrebbe poppare la print altrimenti)
+
+
+5. dump del binario
+- ho una read arbitraria
+- se devo avere un leak di libc: prova a stampare un addr dalla got e con libc database trova la versione della libc
+
+
+
+RET2VDSO:
+vdso = area di memoria messa nei binari dal kernele' kernel dependent, se abbiamo kernel vecchi e' bruteforceabile (11 bits)
+
+- ha dentro gadget (strani) e syscalls (importante)
+
+- serve a chiamare le syscall che vengono chiamate frequentemente (e considerate safe tipo gettime) senza passare l'esecuzione al kernel
+
+
+
+
+FSOP:
+slide: vedi presentazione di DEFCON
+
+- file stream oriented programming
+
+sfruttiasmo le trutture dei file (stdin stdou, stderr ecc.)
+le strutture sono nella libc, le struct dei file che vengono aperti vengono allocate sull'heap (utile se ho of su heap)
+
+
+file structure:
+- flags
+- stream buffer
+- file descriptor = usato dal kernel per sapere su che file scrivere
+
+i nomi delle struct dei file iniziano con _IO_num_ ecc..
+
+
+stream byffer = la libc si salva il contenuto da scrivere su un buffer e viene scritto sul file quando viene fatto un flush o chiusi gli stream.
+
+le strutture dei file vewngono salvate in una linked list
+
+testa = ultimo file allocato, quando un file viene aperto viene messo in testa
+
+vtable = contiene i puntatori a funzione (molto interessante)
+
+
+! nella libc 2.24 e' stato introdotta una funzione che valida le vtable: IO_validate_vtable
+
+viene chiamata tutte le volte prima di chiamare le funz a vtable, controlla che la funzione sia nel range delle vtable, se non lo e' viene chiamata IO_vtable_check
+
+
+!! prima di libc 2.24 utilizzava u puntatore a funzione per modificare i buffer ma non ci sono controli su questo puntatore e quindi posso modificare la vtable: posso anche controllare i parametri della funzione se faccio of sulla struttura di un file
+
+per le libc nuove:
+
+- ottenere arb read e write, ci sono un sacco di puntatori usati per fare buffering che possono farcela ottenere se li controlliamo
+
+
+p *_IO_list_all -> su gdb stampa la struttura del file
+
+chall:
+vedi sorgente glibc 2.37
+
+per le flag copiare le flag di default
+metto a false _IO_CURRENTLY_PLAYING o _IO_LINE_BUF per skippare l'if
+
+scrivo system al posto di fwrite nella got
+
+ultimo punto:
+angr fsrop
+la vtable della wilddaata
+
+wide data = struttura molto simile a file struct puntata dalla file struct
+
+_wide_vtable: non ha nessun check, se sovrascrivo tutta la foile struct e posso chiamare _IO_wfile_overflow che viene chiamata se la vtable e' legit
+
+
+mode deve essere > 0: indica che il file usa wide data
+
+le flag sono importanti perhc'e la struttura di wide data usa le flag
+
+
+normalmente il target e' IO_flush_all_lockp, perche' triggera l'exploit
+
+
+altre tecniche per exploitation in file struct:
+house of apple 1 e 2
+house of ham
+
+
+link utili:
+sources libc:
+elixir.bootlin.com/glibc/latest/source/libio
+
+https://blog.kylebot.net/2022/10/22/angry-FSROP/
+
+slide DEFCON:
+https://www.slideshare.net/AngelBoy1/play-with-file-structure-yet-another-binary-exploit-technique
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
