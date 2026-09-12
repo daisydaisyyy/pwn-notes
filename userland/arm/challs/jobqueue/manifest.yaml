@@ -1,0 +1,24 @@
+deployments:
+  - name: jobqueue
+    exposedPorts:
+      - name: tcp
+        port: 9999
+    podSpec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 5
+      containers:
+        - name: jobqueue
+          image: overseers/jobqueue-challenge:latest
+          ports:
+            - name: tcp
+              containerPort: 9999
+          securityContext:
+            seccompProfile:
+              type: Unconfined
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "1"
+              memory: "512Mi"

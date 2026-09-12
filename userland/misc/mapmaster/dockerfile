@@ -1,0 +1,25 @@
+FROM ubuntu@sha256:b4b521bfcec90b11d2869e00fe1f2380c21cbfcd799ee35df8bd7ac09e6f63ea AS app
+ENV DEBIAN_FRONTEND noninteractive
+RUN apt-get update && \
+    apt-get install -y \
+    python3 && \
+        apt-get clean autoclean && \
+        apt-get autoremove --yes && \
+        rm -rf /var/lib/{apt,dpkg,cache,log}/
+
+RUN apt-get install -y xinetd
+
+RUN useradd -m ctf
+
+COPY ./mapmaster.py /mapmaster.py
+COPY ./xinetd.conf /etc/xinetd.d/mapmaster
+COPY ./entry.sh /entry.sh
+COPY ./run.sh /run.sh
+
+RUN chmod +x /mapmaster.py /entry.sh /run.sh
+
+ENTRYPOINT ./entry.sh
+# ENTRYPOINT socat tcp-listen:5000,reuseaddr,fork,nodelay exec:/mapmaster.py
+
+EXPOSE 5000
+

@@ -1,0 +1,16 @@
+services:
+  chall:
+    image: cybersecnatlab/challenge-jail@sha256:1a500d5699e108d1ab49f4d462ad985e53905b38f7bbb3caa4dba92ded61a4f3
+    container_name: Ultimate-Parallel-Runner
+    restart: unless-stopped
+    init: true
+    privileged: true
+    volumes:
+      - './build/chall:/home/user/chall:ro'
+    ports:
+      - '1337:1337'
+    environment:
+      - 'NETWORK=true'
+      - 'FLAG=bhackariCTF{REDACTED}'
+      - 'FORWARD_STDERR=false'
+      - 'TIMEOUT=10'

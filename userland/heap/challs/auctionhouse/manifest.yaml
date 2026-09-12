@@ -1,0 +1,28 @@
+deployments:
+  - name: auction
+    exposedPorts:
+      - name: tcp
+        port: 5000
+    podSpec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 5
+      containers:
+        - name: auction
+          image: overseers/auctionhouse-challenge:latest
+          ports:
+            - name: tcp
+              containerPort: 5000
+          securityContext:
+            capabilities:
+              add: ["SYS_ADMIN"]
+            seccompProfile:
+              type: Unconfined
+            appArmorProfile:
+              type: Unconfined
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"

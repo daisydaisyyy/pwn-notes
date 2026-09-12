@@ -1,0 +1,11 @@
+---
+services:
+  snaketickets:
+    build: .
+    image: snaketickets
+    privileged: true
+    read_only: true
+    ports:
+      - "1337:1337"
+    environment:
+      FLAG: snakeCTF{fake_flag}

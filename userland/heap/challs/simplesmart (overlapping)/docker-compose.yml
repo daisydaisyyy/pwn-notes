@@ -1,0 +1,19 @@
+services:
+  simplesmart:
+    image: cybersecnatlab/challenge-jail:ubuntu-noble@sha256:bdb4f33f2c4604c8818b86fc7d52ce50c047a9556b43a8005c3d61ca1622dd43
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - seccomp:unconfined
+      - apparmor:unconfined
+    cap_add:
+      - ALL
+    ports:
+      - "1337:1337"
+    volumes:
+      - "./simplesmart:/home/user/simplesmart:ro"
+      - "./libc.so.6:/home/user/libc.so.6:ro"
+      - "./ld-2.39.so:/home/user/ld-2.39.so:ro"
+      - "./flag.txt:/home/user/flag.txt:ro"
+    working_dir: /home/user
+    command: ["/home/user/ld-2.39.so", "--library-path", "/home/user", "/home/user/simplesmart"]
